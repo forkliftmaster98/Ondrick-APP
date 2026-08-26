@@ -2,19 +2,13 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
-import { calculate, type ShapeInput } from '../../lib/calculator.js';
 import { num } from '../../lib/decimal.js';
 import { sendEmail } from '../../lib/email.js';
-import { applyTradeDiscount } from '../../lib/pricing.js';
+import { computeLineItem } from '../../lib/line-item.js';
+import { shapeSchema } from '../../lib/shape-schema.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { buildCustomerEmailBody, buildStaffEmailBody } from './notify.js';
 import { serializeQuote } from './serialize.js';
-
-const shapeSchema: z.ZodType<ShapeInput> = z.discriminatedUnion('shape', [
-  z.object({ shape: z.literal('rect'), lengthFt: z.number().positive(), widthFt: z.number().positive() }),
-  z.object({ shape: z.literal('circle'), diameterFt: z.number().positive() }),
-  z.object({ shape: z.literal('manual'), sqft: z.number().positive() }),
-]);
 
 const quoteItemSchema = z.object({
   productId: z.string().uuid(),
@@ -24,7 +18,8 @@ const quoteItemSchema = z.object({
 });
 
 const submitQuoteSchema = z.object({
-  items: z.array(quoteItemSchema).min(1),
+  // Omit entirely to submit the caller's persisted cart instead (see below).
+  items: z.array(quoteItemSchema).min(1).optional(),
   fulfillment: z.enum(['DELIVERY', 'PICKUP']),
   contactName: z.string().trim().min(1).max(200),
   phone: z.string().trim().min(1).max(50),
@@ -33,32 +28,37 @@ const submitQuoteSchema = z.object({
   driverNotes: z.string().trim().max(1000).optional(),
 });
 
+interface ComputedQuoteItem {
+  categoryName: string;
+  productName: string;
+  shapeSummary: string;
+  depthIn: number;
+  wastePct: number;
+  yards: number;
+  bags: number;
+  weightLb: number;
+  cost: number;
+}
+
 export async function quotesRoutes(app: FastifyInstance) {
   // Requires an authenticated account (requireAuth), per BACKEND_SPEC.md:
-  // "submitting a quote requires a signed-in account." Every number in the
-  // response is computed here from current product data — the client sends
-  // only the shape/depth/waste inputs and a product id, never a cost, so a
-  // tampered request can't lowball a quote.
+  // "submitting a quote requires a signed-in account."
+  //
+  // Two ways to supply the line items:
+  //  - `items` in the body: for a guest who calculated before signing in and
+  //    has no persisted cart. Only shape/depth/waste/product-id are trusted
+  //    from the client — cost is always recomputed here from current pricing.
+  //  - `items` omitted: submit whatever is in the caller's persisted cart.
+  //    Those rows are already frozen at add-to-cart time (see cart routes),
+  //    so they're copied verbatim rather than recomputed — a catalog price
+  //    change since the item was added must not silently shift this quote.
+  //    The cart is cleared once the quote is created.
   app.post('/quotes', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = submitQuoteSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
     }
     const { items, fulfillment, contactName, phone, email, address, driverNotes } = parsed.data;
-
-    const productIds = [...new Set(items.map((item) => item.productId))];
-    const products = await prisma.materialProduct.findMany({
-      where: { id: { in: productIds } },
-      include: { category: true },
-    });
-    const productMap = new Map(products.map((product) => [product.id, product]));
-
-    for (const item of items) {
-      const product = productMap.get(item.productId);
-      if (!product || !product.active) {
-        return reply.status(400).send({ error: 'invalid_product', productId: item.productId });
-      }
-    }
 
     const user = await prisma.user.findUniqueOrThrow({
       where: { id: request.currentUser!.id },
@@ -72,34 +72,65 @@ export async function quotesRoutes(app: FastifyInstance) {
       ? (user.contractorCode?.label ?? user.contractorCode?.code ?? null)
       : null;
 
-    const computedItems = items.map((item) => {
-      const product = productMap.get(item.productId)!;
-      const listPrice = num(product.pricePerYard) as number;
-      const pricePerYard =
-        verified && discountPct !== null ? applyTradeDiscount(listPrice, discountPct) : listPrice;
-      const fallbackDepthIn = (num(product.typicalDepthIn) ?? num(product.category.typicalDepthIn)) as number;
+    let computedItems: ComputedQuoteItem[];
+    let sourceCartId: string | null = null;
 
-      const result = calculate({
-        shapeInput: item.shapeInput,
-        depthIn: item.depthIn ?? null,
-        fallbackDepthIn,
-        wastePct: item.wastePct,
-        pricePerYard,
-        weightPerYardLb: product.category.weightPerYardLb,
+    if (items && items.length > 0) {
+      const productIds = [...new Set(items.map((item) => item.productId))];
+      const products = await prisma.materialProduct.findMany({
+        where: { id: { in: productIds } },
+        include: { category: true },
       });
+      const productMap = new Map(products.map((product) => [product.id, product]));
 
-      return {
-        categoryName: product.category.name,
-        productName: product.name,
-        shapeSummary: result.shapeSummary,
-        depthIn: result.depthIn,
-        wastePct: item.wastePct,
-        yards: result.yards,
-        bags: result.bags,
-        weightLb: result.weightLb,
-        cost: result.cost,
-      };
-    });
+      for (const item of items) {
+        const product = productMap.get(item.productId);
+        if (!product || !product.active) {
+          return reply.status(400).send({ error: 'invalid_product', productId: item.productId });
+        }
+      }
+
+      computedItems = items.map((item) => {
+        const product = productMap.get(item.productId)!;
+        const line = computeLineItem({
+          product,
+          category: product.category,
+          shapeInput: item.shapeInput,
+          depthIn: item.depthIn,
+          wastePct: item.wastePct,
+          verified,
+          discountPct,
+        });
+        return {
+          categoryName: line.categoryName,
+          productName: line.productName,
+          shapeSummary: line.shapeSummary,
+          depthIn: line.depthIn,
+          wastePct: line.wastePct,
+          yards: line.yards,
+          bags: line.bags,
+          weightLb: line.weightLb,
+          cost: line.cost,
+        };
+      });
+    } else {
+      const cart = await prisma.cart.findUnique({ where: { userId: user.id }, include: { items: true } });
+      if (!cart || cart.items.length === 0) {
+        return reply.status(400).send({ error: 'empty_cart' });
+      }
+      sourceCartId = cart.id;
+      computedItems = cart.items.map((item) => ({
+        categoryName: item.categoryName,
+        productName: item.productName,
+        shapeSummary: item.shapeSummary,
+        depthIn: num(item.depthIn) as number,
+        wastePct: num(item.wastePct) as number,
+        yards: num(item.yards) as number,
+        bags: item.bags,
+        weightLb: item.weightLb,
+        cost: num(item.cost) as number,
+      }));
+    }
 
     const total = Math.round(computedItems.reduce((sum, item) => sum + item.cost, 0) * 100) / 100;
 
@@ -119,6 +150,10 @@ export async function quotesRoutes(app: FastifyInstance) {
       },
       include: { items: true },
     });
+
+    if (sourceCartId) {
+      await prisma.cartItem.deleteMany({ where: { cartId: sourceCartId } });
+    }
 
     const serialized = serializeQuote(quote);
     await Promise.all([

@@ -3,6 +3,7 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 import { prisma } from './db/prisma.js';
 import { authRoutes } from './modules/auth/routes.js';
+import { cartRoutes } from './modules/cart/routes.js';
 import { catalogRoutes } from './modules/catalog/routes.js';
 import { dumpingRoutes } from './modules/dumping/routes.js';
 import { toolsRoutes } from './modules/tools/routes.js';
@@ -45,6 +46,7 @@ export function buildApp() {
   app.register(contractorDocsRoutes);
 
   app.register(authRoutes);
+  app.register(cartRoutes);
   app.register(contractorRoutes);
   app.register(quotesRoutes);
   app.register(reviewsRoutes);
