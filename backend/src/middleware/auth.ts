@@ -40,3 +40,15 @@ export async function optionalAuth(request: FastifyRequest, reply: FastifyReply)
 
   request.currentUser = toSafeUser(user);
 }
+
+async function requireAdminOnly(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (!request.currentUser?.isAdmin) {
+    return reply.status(403).send({ error: 'forbidden' });
+  }
+}
+
+// A real server-enforced role check (request.currentUser.isAdmin, set from
+// a DB column), never the prototype's client-side PIN/allowlist. Use as
+// `{ preHandler: requireAdmin }` — runs requireAuth first so an
+// unauthenticated caller gets 401, not 403.
+export const requireAdmin = [requireAuth, requireAdminOnly];
