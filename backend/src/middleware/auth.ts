@@ -24,3 +24,19 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
 
   request.currentUser = toSafeUser(user);
 }
+
+// For routes that must stay accessible without an account (the public
+// catalog) but adjust their response when the caller happens to be signed
+// in — e.g. showing trade pricing to a verified contractor. Never rejects.
+export async function optionalAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const token = request.cookies[SESSION_COOKIE];
+  if (!token) return;
+
+  const user = await getSessionUser(token);
+  if (!user) {
+    reply.clearCookie(SESSION_COOKIE, { path: '/' });
+    return;
+  }
+
+  request.currentUser = toSafeUser(user);
+}

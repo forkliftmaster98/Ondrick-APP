@@ -10,6 +10,7 @@ import { clearanceRoutes } from './modules/clearance/routes.js';
 import { eventsRoutes } from './modules/events/routes.js';
 import { teamRoutes } from './modules/team/routes.js';
 import { contractorDocsRoutes } from './modules/contractor-docs/routes.js';
+import { contractorRoutes } from './modules/contractor/routes.js';
 
 export function buildApp() {
   const app = Fastify({
@@ -42,6 +43,7 @@ export function buildApp() {
   app.register(contractorDocsRoutes);
 
   app.register(authRoutes);
+  app.register(contractorRoutes);
 
   return app;
 }
