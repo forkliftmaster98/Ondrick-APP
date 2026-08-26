@@ -21,6 +21,8 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/rate-limit": "^10.2.2",
     "@prisma/client": "^5.20.0",
     "argon2": "^0.41.1",
     "dotenv": "^16.4.5",

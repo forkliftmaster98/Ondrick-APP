@@ -1,5 +1,8 @@
+import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 import { prisma } from './db/prisma.js';
+import { authRoutes } from './modules/auth/routes.js';
 import { catalogRoutes } from './modules/catalog/routes.js';
 import { dumpingRoutes } from './modules/dumping/routes.js';
 import { toolsRoutes } from './modules/tools/routes.js';
@@ -12,6 +15,11 @@ export function buildApp() {
   const app = Fastify({
     logger: true,
   });
+
+  app.register(cookie);
+  // global: false — most routes aren't rate-limited; /auth/login opts in
+  // with its own stricter per-IP+email config.
+  app.register(rateLimit, { global: false });
 
   app.get('/health', async (_request, reply) => {
     try {
@@ -32,6 +40,8 @@ export function buildApp() {
   app.register(eventsRoutes);
   app.register(teamRoutes);
   app.register(contractorDocsRoutes);
+
+  app.register(authRoutes);
 
   return app;
 }
