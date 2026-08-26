@@ -1,6 +1,7 @@
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
+import { env } from './config/env.js';
 import { prisma } from './db/prisma.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { cartRoutes } from './modules/cart/routes.js';
@@ -35,7 +36,9 @@ const UPLOAD_BODY_LIMIT_BYTES = 10 * 1024 * 1024; // 10MB, covers the local-driv
 
 export function buildApp() {
   const app = Fastify({
-    logger: true,
+    // Quiet during the test suite — request-by-request logs from dozens of
+    // inject() calls would otherwise bury a real assertion failure.
+    logger: env.NODE_ENV !== 'test',
     bodyLimit: UPLOAD_BODY_LIMIT_BYTES,
   });
 
