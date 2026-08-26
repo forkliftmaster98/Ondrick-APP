@@ -28,11 +28,24 @@ import { adminQuotesRoutes } from './modules/admin/quotes.js';
 import { adminReviewsRoutes } from './modules/admin/reviews.js';
 import { adminSettingsRoutes } from './modules/admin/settings.js';
 import { adminPinRoutes } from './modules/admin/pin.js';
+import { adminUploadsRoutes } from './modules/admin/uploads.js';
+import { uploadsRoutes } from './modules/uploads/routes.js';
+
+const UPLOAD_BODY_LIMIT_BYTES = 10 * 1024 * 1024; // 10MB, covers the local-driver upload routes below
 
 export function buildApp() {
   const app = Fastify({
     logger: true,
+    bodyLimit: UPLOAD_BODY_LIMIT_BYTES,
   });
+
+  // Raw-binary uploads (local storage driver, and any admin-supplied
+  // image/pdf) bypass Fastify's default JSON-only body parsing.
+  app.addContentTypeParser(
+    ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf', 'application/octet-stream'],
+    { parseAs: 'buffer' },
+    (_request, payload, done) => done(null, payload),
+  );
 
   app.register(cookie);
   // global: false — most routes aren't rate-limited; /auth/login opts in
@@ -81,6 +94,12 @@ export function buildApp() {
   app.register(adminReviewsRoutes);
   app.register(adminSettingsRoutes);
   app.register(adminPinRoutes);
+  app.register(adminUploadsRoutes);
+
+  // Local storage driver's own upload/download routes (see lib/storage) —
+  // harmless no-ops in practice when STORAGE_DRIVER=s3, since nothing will
+  // reference /uploads/* URLs in that mode.
+  app.register(uploadsRoutes);
 
   return app;
 }
