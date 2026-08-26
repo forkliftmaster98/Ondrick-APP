@@ -1,0 +1,326 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  CONTRACTOR
+  EMPLOYEE
+}
+
+enum QuoteStatus {
+  NEW
+  CONTACTED
+  CLOSED
+}
+
+enum Fulfillment {
+  DELIVERY
+  PICKUP
+}
+
+// ---------------------------------------------------------------------------
+// Accounts & auth
+// ---------------------------------------------------------------------------
+
+model User {
+  id                   String    @id @default(uuid())
+  email                String    @unique
+  passwordHash         String    @map("password_hash")
+  name                 String?
+  phone                String?
+  address              String?
+  driverNotes          String?   @map("driver_notes")
+  role                 UserRole  @default(CUSTOMER)
+  isAdmin              Boolean   @default(false) @map("is_admin")
+  contractorVerifiedAt DateTime? @map("contractor_verified_at")
+  contractorCodeId     String?   @map("contractor_code_id")
+  contractorCode       ContractorCode? @relation(fields: [contractorCodeId], references: [id], onDelete: SetNull)
+  notifOrderUpdates    Boolean   @default(true) @map("notif_order_updates")
+  notifPromos          Boolean   @default(false) @map("notif_promos")
+  prefLargeText        Boolean   @default(false) @map("pref_large_text")
+  prefReduceMotion     Boolean   @default(false) @map("pref_reduce_motion")
+  createdAt            DateTime  @default(now()) @map("created_at")
+
+  sessions             Session[]
+  passwordResetTokens  PasswordResetToken[]
+  cart                 Cart?
+  quotes               Quote[]
+  reviews              Review[]
+
+  @@index([phone])
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  userAgent String?  @map("user_agent")
+  ip        String?
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// Bootstrap allowlist: an email on this list is granted is_admin at signup time.
+model AdminEmail {
+  email String @id
+
+  @@map("admin_emails")
+}
+
+// Numbered, individually revocable contractor codes (replaces one shared secret).
+model ContractorCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  label     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users     User[]
+
+  @@map("contractor_codes")
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+// ---------------------------------------------------------------------------
+
+model MaterialCategory {
+  id              String  @id @default(uuid())
+  key             String  @unique
+  name            String
+  hint            String?
+  typicalDepthIn  Decimal @map("typical_depth_in") @db.Decimal(5, 2)
+  weightPerYardLb Int     @map("weight_per_yard_lb")
+  sortOrder       Int     @default(0) @map("sort_order")
+  imageUrl        String? @map("image_url")
+
+  products        MaterialProduct[]
+
+  @@map("material_categories")
+}
+
+model MaterialProduct {
+  id             String   @id @default(uuid())
+  categoryId     String   @map("category_id")
+  category       MaterialCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  pricePerYard   Decimal  @map("price_per_yard") @db.Decimal(10, 2)
+  typicalDepthIn Decimal? @map("typical_depth_in") @db.Decimal(5, 2)
+  imageUrl       String?  @map("image_url")
+  active         Boolean  @default(true)
+  sortOrder      Int      @default(0) @map("sort_order")
+
+  cartItems      CartItem[]
+
+  @@index([categoryId])
+  @@map("material_products")
+}
+
+model DumpingItem {
+  id         String  @id @default(uuid())
+  key        String  @unique
+  name       String
+  priceLabel String  @map("price_label")
+  priceNote  String? @map("price_note")
+  rules      String
+  sortOrder  Int     @default(0) @map("sort_order")
+
+  @@map("dumping_items")
+}
+
+// The ordered "we cannot accept" list shown in the dumping rules sheet.
+model DumpingRestriction {
+  id        String @id @default(uuid())
+  text      String
+  sortOrder Int    @default(0) @map("sort_order")
+
+  @@map("dumping_restrictions")
+}
+
+model Tool {
+  id         String  @id @default(uuid())
+  key        String  @unique
+  name       String
+  note       String?
+  priceLabel String  @map("price_label")
+  imageUrl   String? @map("image_url")
+  active     Boolean @default(true)
+  sortOrder  Int     @default(0) @map("sort_order")
+
+  @@map("tools")
+}
+
+model ClearanceItem {
+  id            String  @id @default(uuid())
+  key           String  @unique
+  name          String
+  note          String?
+  priceLabel    String  @map("price_label")
+  wasPriceLabel String? @map("was_price_label")
+  qtyLabel      String? @map("qty_label")
+  active        Boolean @default(true)
+  sortOrder     Int     @default(0) @map("sort_order")
+
+  @@map("clearance_items")
+}
+
+model Event {
+  id        String   @id @default(uuid())
+  title     String
+  startsOn  DateTime @map("starts_on") @db.Date
+  timeLabel String?  @map("time_label")
+  note      String?
+  active    Boolean  @default(true)
+
+  @@map("events")
+}
+
+model TeamMember {
+  id        String  @id @default(uuid())
+  key       String  @unique
+  name      String
+  role      String
+  bio       String?
+  photoUrl  String? @map("photo_url")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  @@map("team_members")
+}
+
+model ContractorDoc {
+  id           String  @id @default(uuid())
+  key          String  @unique
+  name         String
+  updatedLabel String? @map("updated_label")
+  fileKey      String  @map("file_key")
+
+  @@map("contractor_docs")
+}
+
+// ---------------------------------------------------------------------------
+// Cart, quotes, reviews
+// ---------------------------------------------------------------------------
+
+// One persisted cart per signed-in user; anonymous carts stay client-side.
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique @map("user_id")
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  items     CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id                   String   @id @default(uuid())
+  cartId               String   @map("cart_id")
+  cart                 Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId            String?  @map("product_id")
+  product              MaterialProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  categoryName         String   @map("category_name")
+  productName          String   @map("product_name")
+  shapeSummary         String   @map("shape_summary")
+  depthIn              Decimal  @map("depth_in") @db.Decimal(5, 2)
+  wastePct             Decimal  @map("waste_pct") @db.Decimal(5, 2)
+  yards                Decimal  @db.Decimal(10, 2)
+  bags                 Int
+  weightLb             Int      @map("weight_lb")
+  cost                 Decimal  @db.Decimal(10, 2)
+  pricePerYardSnapshot Decimal  @map("price_per_yard_snapshot") @db.Decimal(10, 2)
+  addedAt              DateTime @default(now()) @map("added_at")
+
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+model Quote {
+  id                  String      @id @default(uuid())
+  userId              String      @map("user_id")
+  user                User        @relation(fields: [userId], references: [id])
+  submittedAt         DateTime    @default(now()) @map("submitted_at")
+  fulfillment         Fulfillment
+  total               Decimal     @db.Decimal(10, 2)
+  contactName         String      @map("contact_name")
+  phone               String
+  email               String
+  address             String
+  driverNotes         String?     @map("driver_notes")
+  status              QuoteStatus @default(NEW)
+  // Frozen at submission time so later code renames/deactivation don't rewrite history.
+  discountPct         Decimal?    @map("discount_pct") @db.Decimal(5, 2)
+  discountSourceLabel String?     @map("discount_source_label")
+
+  items               QuoteItem[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id           String  @id @default(uuid())
+  quoteId      String  @map("quote_id")
+  quote        Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  categoryName String  @map("category_name")
+  productName  String  @map("product_name")
+  shapeSummary String  @map("shape_summary")
+  depthIn      Decimal @map("depth_in") @db.Decimal(5, 2)
+  wastePct     Decimal @map("waste_pct") @db.Decimal(5, 2)
+  yards        Decimal @db.Decimal(10, 2)
+  bags         Int
+  weightLb     Int     @map("weight_lb")
+  cost         Decimal @db.Decimal(10, 2)
+
+  @@map("quote_items")
+}
+
+// Public by default (no moderation gate) — visible=false is an after-the-fact
+// takedown for spam/abuse, never a pre-publish approval step.
+model Review {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating    Int
+  text      String
+  createdAt DateTime @default(now()) @map("created_at")
+  visible   Boolean  @default(true)
+
+  @@index([visible])
+  @@map("reviews")
+}
+
+// Singleton settings row (id is always 1).
+model Settings {
+  id               Int     @id @default(1)
+  adminPinHash     String? @map("admin_pin_hash")
+  tradeDiscountPct Decimal @default(10) @map("trade_discount_pct") @db.Decimal(5, 2)
+
+  @@map("settings")
+}
