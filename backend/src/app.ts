@@ -11,6 +11,8 @@ import { eventsRoutes } from './modules/events/routes.js';
 import { teamRoutes } from './modules/team/routes.js';
 import { contractorDocsRoutes } from './modules/contractor-docs/routes.js';
 import { contractorRoutes } from './modules/contractor/routes.js';
+import { quotesRoutes } from './modules/quotes/routes.js';
+import { reviewsRoutes } from './modules/reviews/routes.js';
 
 export function buildApp() {
   const app = Fastify({
@@ -44,6 +46,8 @@ export function buildApp() {
 
   app.register(authRoutes);
   app.register(contractorRoutes);
+  app.register(quotesRoutes);
+  app.register(reviewsRoutes);
 
   return app;
 }
