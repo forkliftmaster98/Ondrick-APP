@@ -6,6 +6,7 @@ import { prisma } from '../../db/prisma.js';
 import { sendEmail } from '../../lib/email.js';
 import { sha256Hex } from '../../lib/hash.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
+import { isUniqueConstraintViolation } from '../../lib/prisma-errors.js';
 import { toSafeUser } from '../../lib/safe-user.js';
 import { createSession, deleteAllUserSessions, deleteSession } from '../../lib/session.js';
 import { requireAuth, SESSION_COOKIE } from '../../middleware/auth.js';
@@ -74,9 +75,19 @@ export async function authRoutes(app: FastifyInstance) {
       prisma.adminEmail.findUnique({ where: { email } }),
     ]);
 
-    const user = await prisma.user.create({
-      data: { email, passwordHash, name, phone, isAdmin: Boolean(adminEmail) },
-    });
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: { email, passwordHash, name, phone, isAdmin: Boolean(adminEmail) },
+      });
+    } catch (err) {
+      // The findUnique check above can't see a concurrent signup for the
+      // same email that hasn't committed yet — this is the real guard.
+      if (isUniqueConstraintViolation(err)) {
+        return reply.status(409).send({ error: 'email_taken' });
+      }
+      throw err;
+    }
 
     const { token, expiresAt } = await createSession(user.id, {
       userAgent: request.headers['user-agent'],

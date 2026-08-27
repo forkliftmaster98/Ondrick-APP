@@ -5,9 +5,13 @@ export function buildStaffEmailBody(quote: SerializedQuote): string {
     (item) =>
       `- ${item.productName} (${item.categoryName}): ${item.shapeSummary}, ${item.depthIn}" depth, ${item.yards} yd, $${item.cost.toFixed(2)}`,
   );
-  const discountLine = quote.discountPct
-    ? `\nDiscount applied: ${quote.discountPct}% off — ${quote.discountSourceLabel ?? 'contractor code'}`
-    : '';
+  // !== null, not truthiness — a legitimate 0% discount (e.g. trade
+  // discount temporarily suspended) still has discountSourceLabel worth
+  // recording, and a falsy check would silently drop that line.
+  const discountLine =
+    quote.discountPct !== null
+      ? `\nDiscount applied: ${quote.discountPct}% off — ${quote.discountSourceLabel ?? 'contractor code'}`
+      : '';
 
   return [
     `New quote request from ${quote.contactName} (${quote.email}, ${quote.phone})`,

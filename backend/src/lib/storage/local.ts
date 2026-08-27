@@ -7,17 +7,24 @@ import type { StorageAdapter } from './types.js';
 // Dev/test-only adapter: uploads land on local disk, served by this same
 // server, so the whole pipeline is testable without any cloud credentials.
 // Upload and signed-download URLs both point at PUT/GET /uploads/:key*,
-// authorized by an HMAC token over (key, expiry) — the same shape a real
-// presigned S3 URL has, so swapping to the S3 adapter later changes no
-// caller code.
+// authorized by an HMAC token over (key, expiry, contentType) — the same
+// shape a real presigned S3 URL has, so swapping to the S3 adapter later
+// changes no caller code. contentType is bound into the signature (not
+// just carried alongside it) so it can't be swapped after signing; it's
+// '' for a download URL, which never declares one.
 
-function sign(key: string, expiresAt: number): string {
-  return createHmac('sha256', env.SESSION_SECRET).update(`${key}:${expiresAt}`).digest('hex');
+function sign(key: string, expiresAt: number, contentType: string): string {
+  return createHmac('sha256', env.SESSION_SECRET).update(`${key}:${expiresAt}:${contentType}`).digest('hex');
 }
 
-export function verifyLocalUploadToken(key: string, expiresAt: number, token: string): boolean {
+export function verifyLocalUploadToken(
+  key: string,
+  expiresAt: number,
+  contentType: string,
+  token: string,
+): boolean {
   if (Date.now() > expiresAt) return false;
-  const expected = sign(key, expiresAt);
+  const expected = sign(key, expiresAt, contentType);
   const a = Buffer.from(expected);
   const b = Buffer.from(token);
   return a.length === b.length && timingSafeEqual(a, b);
@@ -30,11 +37,17 @@ export function localObjectPath(key: string): string {
   return path.join(env.LOCAL_UPLOAD_DIR, key);
 }
 
+// Sidecar file recording the content-type declared at sign time, so GET can
+// honor it instead of only guessing from the key's file extension.
+export function localContentTypePath(key: string): string {
+  return `${localObjectPath(key)}.contenttype`;
+}
+
 export class LocalDiskAdapter implements StorageAdapter {
-  async createUploadTarget(key: string): Promise<{ uploadUrl: string; method: 'PUT' }> {
+  async createUploadTarget(key: string, contentType: string): Promise<{ uploadUrl: string; method: 'PUT' }> {
     const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes to complete the PUT
-    const token = sign(key, expiresAt);
-    const uploadUrl = `${env.PUBLIC_BASE_URL}/uploads/${key}?token=${token}&expires=${expiresAt}`;
+    const token = sign(key, expiresAt, contentType);
+    const uploadUrl = `${env.PUBLIC_BASE_URL}/uploads/${key}?token=${token}&expires=${expiresAt}&contentType=${encodeURIComponent(contentType)}`;
     return { uploadUrl, method: 'PUT' };
   }
 
@@ -44,11 +57,12 @@ export class LocalDiskAdapter implements StorageAdapter {
 
   async getSignedDownloadUrl(key: string, ttlSeconds: number): Promise<string> {
     const expiresAt = Date.now() + ttlSeconds * 1000;
-    const token = sign(key, expiresAt);
+    const token = sign(key, expiresAt, '');
     return `${env.PUBLIC_BASE_URL}/uploads/${key}?token=${token}&expires=${expiresAt}`;
   }
 
   async deleteObject(key: string): Promise<void> {
     await unlink(localObjectPath(key)).catch(() => {});
+    await unlink(localContentTypePath(key)).catch(() => {});
   }
 }

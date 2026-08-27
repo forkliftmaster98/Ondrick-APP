@@ -17,6 +17,14 @@ const updateSchema = createSchema.partial();
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 export async function adminToolsRoutes(app: FastifyInstance) {
+  // Includes inactive rows (unlike the public GET /tools) so admins can
+  // find and reactivate/edit anything, not just what they created this
+  // session — the only other way to learn a row's id.
+  app.get('/admin/tools', { preHandler: requireAdmin }, async (_request, reply) => {
+    const tools = await prisma.tool.findMany({ orderBy: { sortOrder: 'asc' } });
+    return reply.send({ tools });
+  });
+
   app.post('/admin/tools', { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {

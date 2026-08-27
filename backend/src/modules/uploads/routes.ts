@@ -1,9 +1,9 @@
 import { createReadStream } from 'node:fs';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { localObjectPath, verifyLocalUploadToken } from '../../lib/storage/local.js';
+import { localContentTypePath, localObjectPath, verifyLocalUploadToken } from '../../lib/storage/local.js';
 
 const MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
@@ -17,7 +17,18 @@ const MIME_BY_EXT: Record<string, string> = {
 const tokenQuerySchema = z.object({
   token: z.string().min(1),
   expires: z.coerce.number().int().positive(),
+  // Present (URL-encoded) on an upload URL, since contentType is bound into
+  // its signature; absent (defaults to '') on a download URL, which never
+  // declares one — see lib/storage/local.ts's sign().
+  contentType: z.string().optional().default(''),
 });
+
+async function resolveContentType(key: string): Promise<string> {
+  const declared = await readFile(localContentTypePath(key), 'utf8').catch(() => null);
+  if (declared) return declared;
+  const ext = path.extname(key).toLowerCase();
+  return MIME_BY_EXT[ext] ?? 'application/octet-stream';
+}
 
 // Only meaningful when STORAGE_DRIVER=local (see lib/storage) — the dev/test
 // stand-in for a real object store, serving exactly the shape a presigned
@@ -31,7 +42,7 @@ export async function uploadsRoutes(app: FastifyInstance) {
     if (!query.success) {
       return reply.status(400).send({ error: 'invalid_query' });
     }
-    if (!verifyLocalUploadToken(key, query.data.expires, query.data.token)) {
+    if (!verifyLocalUploadToken(key, query.data.expires, query.data.contentType, query.data.token)) {
       return reply.status(403).send({ error: 'invalid_or_expired_token' });
     }
     if (!Buffer.isBuffer(request.body)) {
@@ -41,6 +52,9 @@ export async function uploadsRoutes(app: FastifyInstance) {
     const filePath = localObjectPath(key);
     await mkdir(path.dirname(filePath), { recursive: true });
     await writeFile(filePath, request.body);
+    if (query.data.contentType) {
+      await writeFile(localContentTypePath(key), query.data.contentType);
+    }
 
     return reply.status(201).send({ status: 'ok' });
   });
@@ -57,7 +71,10 @@ export async function uploadsRoutes(app: FastifyInstance) {
 
     if (!isPublic) {
       const query = tokenQuerySchema.safeParse(request.query);
-      if (!query.success || !verifyLocalUploadToken(key, query.data.expires, query.data.token)) {
+      if (
+        !query.success ||
+        !verifyLocalUploadToken(key, query.data.expires, query.data.contentType, query.data.token)
+      ) {
         return reply.status(403).send({ error: 'invalid_or_expired_token' });
       }
     }
@@ -69,8 +86,7 @@ export async function uploadsRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'not_found' });
     }
 
-    const ext = path.extname(filePath).toLowerCase();
-    reply.header('content-type', MIME_BY_EXT[ext] ?? 'application/octet-stream');
+    reply.header('content-type', await resolveContentType(key));
     return reply.send(createReadStream(filePath));
   });
 }

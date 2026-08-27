@@ -16,6 +16,14 @@ const updateSchema = createSchema.partial();
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 export async function adminDumpingItemsRoutes(app: FastifyInstance) {
+  // Unlike the public /dumping-items read, this returns every row (there's
+  // no active flag on this model to filter by) so admins can get the id
+  // needed for PATCH/DELETE on anything, including seeded rows.
+  app.get('/admin/dumping-items', { preHandler: requireAdmin }, async (_request, reply) => {
+    const items = await prisma.dumpingItem.findMany({ orderBy: { sortOrder: 'asc' } });
+    return reply.send({ items });
+  });
+
   app.post('/admin/dumping-items', { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {

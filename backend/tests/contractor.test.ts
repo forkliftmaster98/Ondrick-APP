@@ -57,4 +57,23 @@ describe('contractor verification + trade pricing', () => {
     expect(product.pricePerYard).toBe(44);
     expect(product.tradePricePerYard).toBe(39.6); // round(44 * 0.9, 2)
   });
+
+  it('rate-limits repeated code guesses on the same session', async () => {
+    const signup = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: { email: 'guesser@example.com', password: 'correcthorsebattery', name: 'G', phone: '555-3' },
+    });
+    const cookie = sessionCookieHeader(signup);
+
+    const attempt = (code: string) =>
+      app.inject({ method: 'POST', url: '/me/verify-contractor', headers: { cookie }, payload: { code } });
+
+    const results = [];
+    for (let i = 0; i < 11; i++) {
+      results.push(await attempt(`NOTREAL${i}`)); // none of these are the seeded code
+    }
+    expect(results.slice(0, 10).every((r) => r.statusCode === 400)).toBe(true);
+    expect(results[10]!.statusCode).toBe(429);
+  });
 });

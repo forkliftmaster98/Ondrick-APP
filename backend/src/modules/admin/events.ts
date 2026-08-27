@@ -15,6 +15,13 @@ const updateSchema = createSchema.partial();
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 export async function adminEventsRoutes(app: FastifyInstance) {
+  // Includes inactive/past events (unlike the public GET /events), so
+  // admins can find the id of anything to edit or delete.
+  app.get('/admin/events', { preHandler: requireAdmin }, async (_request, reply) => {
+    const events = await prisma.event.findMany({ orderBy: { startsOn: 'asc' } });
+    return reply.send({ events });
+  });
+
   app.post('/admin/events', { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {

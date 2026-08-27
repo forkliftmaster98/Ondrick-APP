@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
 import { num } from '../../lib/decimal.js';
 import { computeLineItem } from '../../lib/line-item.js';
+import { isVerifiedContractor } from '../../lib/pricing.js';
 import { shapeSchema } from '../../lib/shape-schema.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { serializeCart } from './serialize.js';
@@ -49,7 +50,7 @@ export async function cartRoutes(app: FastifyInstance) {
     }
 
     const user = await prisma.user.findUniqueOrThrow({ where: { id: request.currentUser!.id } });
-    const verified = user.role === 'CONTRACTOR' && user.contractorVerifiedAt !== null;
+    const verified = isVerifiedContractor(user);
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
     const discountPct = settings ? (num(settings.tradeDiscountPct) as number) : null;
 

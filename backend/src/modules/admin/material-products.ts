@@ -36,6 +36,15 @@ const updateSchema = createSchema.partial();
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 export async function adminMaterialProductsRoutes(app: FastifyInstance) {
+  // Includes inactive products (unlike the public catalog read), so admins
+  // can find the id of anything to edit, reactivate, or delete.
+  app.get('/admin/material-products', { preHandler: requireAdmin }, async (_request, reply) => {
+    const products = await prisma.materialProduct.findMany({
+      orderBy: [{ categoryId: 'asc' }, { sortOrder: 'asc' }],
+    });
+    return reply.send({ products: products.map(serializeProduct) });
+  });
+
   app.post('/admin/material-products', { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {

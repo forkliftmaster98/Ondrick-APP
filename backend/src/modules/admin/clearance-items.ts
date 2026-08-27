@@ -18,6 +18,13 @@ const updateSchema = createSchema.partial();
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 export async function adminClearanceItemsRoutes(app: FastifyInstance) {
+  // Includes inactive rows (unlike the public GET /clearance-items) so
+  // admins can find the id of anything, not just what they created.
+  app.get('/admin/clearance-items', { preHandler: requireAdmin }, async (_request, reply) => {
+    const items = await prisma.clearanceItem.findMany({ orderBy: { sortOrder: 'asc' } });
+    return reply.send({ items });
+  });
+
   app.post('/admin/clearance-items', { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {

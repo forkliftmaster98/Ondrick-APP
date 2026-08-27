@@ -16,6 +16,11 @@ const updateSchema = createSchema.partial();
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 export async function adminTeamMembersRoutes(app: FastifyInstance) {
+  app.get('/admin/team-members', { preHandler: requireAdmin }, async (_request, reply) => {
+    const members = await prisma.teamMember.findMany({ orderBy: { sortOrder: 'asc' } });
+    return reply.send({ members });
+  });
+
   app.post('/admin/team-members', { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {

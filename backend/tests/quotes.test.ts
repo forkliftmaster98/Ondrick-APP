@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../src/db/prisma.js';
 import { createTestApp, sessionCookieHeader } from './helpers.js';
 
@@ -8,11 +8,20 @@ async function getCedarProductId(): Promise<string> {
   return product.id;
 }
 
+const emailState = vi.hoisted(() => ({ sent: [] as Array<{ to: string; subject: string; text: string }> }));
+
+vi.mock('../src/lib/email.js', () => ({
+  sendEmail: async (_logger: unknown, message: { to: string; subject: string; text: string }) => {
+    emailState.sent.push(message);
+  },
+}));
+
 describe('quotes', () => {
   let app: FastifyInstance;
 
   beforeEach(async () => {
     app = await createTestApp();
+    emailState.sent.length = 0;
   });
 
   afterEach(async () => {
@@ -174,5 +183,43 @@ describe('quotes', () => {
     expect(quote.discountPct).toBe(10);
     expect(quote.discountSourceLabel).toBe('Demo / seed code');
     expect(quote.total).toBe(118.8); // 3 yards * (44 * 0.9)
+  });
+
+  it('still records and discloses a 0% discount rather than treating it as no discount', async () => {
+    await prisma.settings.update({ where: { id: 1 }, data: { tradeDiscountPct: 0 } });
+
+    const productId = await getCedarProductId();
+    const signup = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: { email: 'quote-zero-discount@example.com', password: 'correcthorsebattery', name: 'Q', phone: '555-4' },
+    });
+    const cookie = sessionCookieHeader(signup);
+    await app.inject({
+      method: 'POST',
+      url: '/me/verify-contractor',
+      headers: { cookie },
+      payload: { code: 'ONDRICKPRO0' },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/quotes',
+      headers: { cookie },
+      payload: {
+        items: [{ productId, shapeInput: { shape: 'manual', sqft: 324 }, depthIn: 3, wastePct: 0 }],
+        fulfillment: 'PICKUP',
+        contactName: 'Q',
+        phone: '555-4',
+        email: 'quote-zero-discount@example.com',
+        address: '1 Main St',
+      },
+    });
+    const quote = res.json().quote;
+    expect(quote.discountPct).toBe(0); // not null — a falsy check would have dropped this
+    expect(quote.discountSourceLabel).toBe('Demo / seed code');
+
+    const staffEmail = emailState.sent.find((m) => m.subject.startsWith('New quote request'));
+    expect(staffEmail!.text).toContain('Discount applied: 0% off — Demo / seed code');
   });
 });

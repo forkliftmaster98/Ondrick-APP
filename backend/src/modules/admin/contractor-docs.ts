@@ -1,12 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
+import { getStorage } from '../../lib/storage/index.js';
 import { isRecordNotFound } from '../../lib/prisma-errors.js';
 import { requireAdmin } from '../../middleware/auth.js';
 
-// fileKey is a storage object key/path, not a public URL — real upload +
-// signed-URL delivery lands in the Phase 6 asset pipeline. For now an admin
-// sets it directly (e.g. after uploading a file some other way).
+const DOWNLOAD_URL_TTL_SECONDS = 15 * 60;
+
+// fileKey is a storage object key/path, not a public URL — an admin sets
+// it after uploading via POST /admin/uploads/sign (purpose: 'contractor-docs').
 const createSchema = z.object({
   key: z.string().trim().min(1).max(100),
   name: z.string().trim().min(1).max(200),
@@ -17,6 +19,20 @@ const updateSchema = createSchema.partial();
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 export async function adminContractorDocsRoutes(app: FastifyInstance) {
+  // Also includes a freshly-signed download link per doc (admins need to
+  // find the id for PATCH/DELETE, and a way to check what they uploaded).
+  app.get('/admin/contractor-docs', { preHandler: requireAdmin }, async (_request, reply) => {
+    const docs = await prisma.contractorDoc.findMany({ orderBy: { name: 'asc' } });
+    const storage = getStorage();
+    const withUrls = await Promise.all(
+      docs.map(async (doc) => ({
+        ...doc,
+        fileUrl: await storage.getSignedDownloadUrl(doc.fileKey, DOWNLOAD_URL_TTL_SECONDS),
+      })),
+    );
+    return reply.send({ docs: withUrls });
+  });
+
   app.post('/admin/contractor-docs', { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {
